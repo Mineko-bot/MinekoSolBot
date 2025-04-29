@@ -4,43 +4,24 @@ import time
 import random
 import asyncio
 import logging
-import aiomysql
-import warnings
-import threading
-import json
 import aiofiles
-import datetime
-from balance import get_balance
+import json
 from dotenv import load_dotenv
-from solana.rpc.async_api import AsyncClient
-import telegram
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext, ContextTypes
 from telegram.error import TimedOut, BadRequest
-from transfer import send_sol, send_sol_e
-from spl_balance import get_solana_token_amount
-from sendSPL import send_spl
 
-warnings.simplefilter("ignore")
-load_dotenv('.env')
 logging.basicConfig(level=logging.ERROR)
+load_dotenv('.env')
 
-# Load environment variables
-TOKEN = {{ENV_VAR}}
-CHANNELID = {{ENV_VAR}}
+TOKEN = os.getenv('TOKEN', '{{ENV_VAR}}')
+CHANNELID = int(os.getenv('TG_CHANNEL_ID', '{{ENV_VAR}}'))
 
-# Blockchain configurations
-SOLANA_RPC_URL = {{ENV_VAR}}
-solana_client = AsyncClient(SOLANA_RPC_URL)
+SOLANA_RPC_URL = os.getenv('SOLANA_RPC_URL', 'https://api.devnet.solana.com')
 
-# Jackpot wallets
-JACKPOT_SOLANA = {{PAYMENT_INFO}}
-
-# Config file path
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 config = {}
 
-# Telegram bot initialization
 bot = Bot(token=TOKEN)
 
 user_last_start_time = {}
@@ -49,12 +30,7 @@ MAX_START_COMMAND_COOLDOWN = 30
 user_spam_count = {}
 user_notified = {}
 
-GAME_MODES = {
-    "mineko": {"grid_size": 8, "mines": 15}
-}
-
 async def load_config():
-    """Load or reload the config from config.json."""
     global config
     try:
         async with aiofiles.open(CONFIG_FILE, 'r') as f:
@@ -62,24 +38,33 @@ async def load_config():
     except Exception as e:
         logging.error(f"Error loading config: {e}")
         config = {
-            "conversion_rates": {"usd_to_sol": 130},
-            "entry_fee_usd": 5,
             "jackpot_share": 0.8,
-            "team_share": 0.2
+            "team_share": 0.2,
+            "game_modes": {
+                "mineko": {
+                    "grid_size": 8,
+                    "mines": 18
+                }
+            }
         }
 
 async def config_reload_task():
-    """Periodically reload the config file."""
     while True:
         await load_config()
         await asyncio.sleep(60)
 
 async def setup_database():
-    """Set up the database."""
     {{DB_OPERATION}}
 
 async def private_chat_only(update: Update, context: CallbackContext):
     return update.effective_chat.type == 'private'
+
+async def increment_referral_count(referrer_id):
+    {{DB_OPERATION}}
+
+async def get_referral_info(user_id):
+    {{DB_OPERATION}}
+    return 0, 0.0
 
 async def create_start_task(update: Update, context: CallbackContext) -> None:
     if not await private_chat_only(update, context):
@@ -107,53 +92,63 @@ async def start(update: Update, context: Application, user_id: int = None) -> No
         return
 
     user_id = user_id or update.effective_user.id
+    await asyncio.sleep(2)
+    referrer_id = context.args[0] if context.args else None
 
-    await asyncio.sleep(2.5)
-
-    solana_wallet = {{DB_OPERATION}}
+    solana_wallet = '{{DB_OPERATION}}'
     if not solana_wallet:
-        solana_wallet = {{PAYMENT_INFO}}
+        solana_wallet = 'mock_solana_wallet_address'
         {{DB_OPERATION}}
+        if referrer_id:
+            try:
+                referrer_id_int = int(referrer_id)
+                {{DB_OPERATION}}
+                if False:
+                    referrer_id_int = None
+            except ValueError:
+                referrer_id_int = None
+            if referrer_id_int:
+                await increment_referral_count(referrer_id_int)
 
-    sol_balance = await asyncio.shield(get_balance(solana_wallet))
+    sol_balance = 0.0
     sol_formatted = f"{math.floor(sol_balance * 1000) / 1000:.3f}"
-    spl_balance = await asyncio.shield(get_solana_token_amount(solana_wallet))
+    spl_balance = 0.0
     spl_formatted = f"{math.floor(spl_balance * 1000) / 1000:.1f}"
     entry_fee = 0.05
     jackpot_share = config.get('jackpot_share', 0.8)
     team_share = config.get('team_share', 0.2)
-    jackpot_wallet = JACKPOT_SOLANA
-    jackpot_balance = await get_balance(jackpot_wallet)
+    jackpot_wallet = '{{ENV_VAR}}'
+    jackpot_balance = 0.0
     jackpot_balance_formatted = f"{math.floor(jackpot_balance * 1000*0.5) / 1000:.3f}"
-    jackpot_balance_mines = await get_solana_token_amount(jackpot_wallet)
+    jackpot_balance_mines = 0.0
     jackpot_balance_mines_formatted = f"{math.floor(jackpot_balance_mines * 1000*0.5) / 1000:.1f}"
 
     welcome_message = (
         f"😺 *Mineko’s Pixel Adventure!* 😺\n\n"
-        f"Meet Mineko, a pixel cat prowling a glitching 8x8 grid in a forgotten digital realm. Hidden beneath are 20 *Boomlings*—sneaky bombs planted by rogue code! Help her paw through the tiles to uncover pixel gems.\n\n"
+        f"Meet Mineko, a pixel cat prowling a glitching {config['game_modes']['mineko']['grid_size']}x{config['game_modes']['mineko']['grid_size']} grid in a forgotten digital realm. Hidden beneath are {config['game_modes']['mineko']['mines']} * *Boomlings*—sneaky bombs planted by rogue code! Help her paw through the tiles to uncover pixel gems.\n\n"
         f"🎮 *How It Works:*\n"
         f"• Tap a paw print (🐾) to flag (📍) a suspected Boomling\n"
         f"• Tap again to reveal: numbers hint at nearby Boomlings, blanks clear safe tiles\n"
         f"• Clear all safe tiles to win big!\n\n"
         f"*•••••• Sol Jackpot: {jackpot_balance_formatted} Sol*\n"
-        f"*••• Token Jackpot: {jackpot_balance_mines_formatted} Mines*\n\n"
+        f"*••• Token Jackpot: {jackpot_balance_mines_formatted} Mineko*\n\n"
         f"💰 *Your Balance:*\n"
         f"• *SOL:* {sol_formatted} \n"
-        f"• *MINES:* {spl_formatted} \n"
-        f"• *Solana:* `{solana_wallet}`\n\n"
+        f"• *MINEKO:* {spl_formatted} \n"
+        f"• *Wallet:* `mock_wallet_address`\n\n"
+        f"*CA:* ``\n"
         f"✨ *Join for {entry_fee} SOL ({jackpot_share*100}% to jackpot)*"
     )
 
     keyboard = [
         [InlineKeyboardButton("Play with SOL 💣 ", callback_data='mineko_mode_sol')],
-        [InlineKeyboardButton("BNB Coming Soon", callback_data='bnb_coming_soon')],
-        [InlineKeyboardButton("SUI Coming Soon", callback_data='sui_coming_soon')],
+        [InlineKeyboardButton("BNB/SUI Coming Soon", callback_data='bnb_coming_soon')],
         [InlineKeyboardButton("How to Play?", callback_data='info'), InlineKeyboardButton("Wallet", callback_data='wallet')],
+        [InlineKeyboardButton("Referral", callback_data='refer')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     image_path = os.path.join(os.path.dirname(__file__), 'start_menu.jpg')
-
     try:
         if update.message:
             with open(image_path, 'rb') as photo:
@@ -190,31 +185,31 @@ async def start(update: Update, context: Application, user_id: int = None) -> No
         else:
             await context.bot.send_message(chat_id=user_id, text=welcome_message, reply_markup=reply_markup, parse_mode="markdown")
 
-async def create_grid(size=8, mines=5):
-    """Create a Mineko grid with Boomlings."""
+async def create_grid(size=None, mines=None):
+    size = size or config['game_modes']['mineko']['grid_size']
+    mines = mines or config['game_modes']['mineko']['mines']
     grid = [[0 for _ in range(size)] for _ in range(size)]
     mine_positions = set()
-    
+
     while len(mine_positions) < mines:
         x = random.randint(0, size-1)
         y = random.randint(0, size-1)
         if (x, y) not in mine_positions:
             mine_positions.add((x, y))
             grid[x][y] = '💣'
-    
+
     for mine_x, mine_y in mine_positions:
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
                 new_x, new_y = mine_x + dx, mine_y + dy
-                if (0 <= new_x < size and 0 <= new_y < size and 
+                if (0 <= new_x < size and 0 <= new_y < size and
                     grid[new_x][new_y] != '💣'):
                     grid[new_x][new_y] += 1
-    
+
     display_grid = [['🐾' for _ in range(size)] for _ in range(size)]
     return grid, display_grid, mine_positions
 
 async def build_keyboard(display_grid, user_id, game_over=False):
-    """Build the Mineko game keyboard with fixed-width buttons."""
     keyboard = []
     for i in range(len(display_grid)):
         row = []
@@ -236,7 +231,6 @@ async def button(update: Update, context: Application) -> None:
 
     async def handle_query():
         if query.data == 'info':
-            entry_fee_usd = config.get('entry_fee_usd', 5)
             jackpot_share = config.get('jackpot_share', 0.8)
             team_share = config.get('team_share', 0.2)
 
@@ -255,16 +249,19 @@ async def button(update: Update, context: Application) -> None:
 
             how_to_play_message = (
                 f"😺 *Mineko’s Guide to Boomling Hunting* 😺\n\n"
-                f"In a pixelated realm, Mineko’s tail twitches as she prowls an 8x8 grid hiding 20 *Boomlings*—glitchy bombs left by rogue code. One wrong paw means BOOM!\n\n"
+                f"In a pixelated realm, Mineko’s tail twitches as she prowls an {config['game_modes']['mineko']['grid_size']}x{config['game_modes']['mineko']['grid_size']} grid hiding {config['game_modes']['mineko']['mines']} *Boomlings*—glitchy bombs left by rogue code. One wrong paw means BOOM!\n\n"
                 f"1. *Tap a paw print* (🐾) to flag (📍) a tile Mineko sniffs as a Boomling\n"
                 f"2. *Tap again* to reveal:\n"
                 f"   - *Numbers (1-8)*: Boomlings lurking nearby\n"
                 f"   - *Blank*: Safe tile, clears more safe spots\n"
                 f"   - *💣 Boomling*: Oh no, Mineko’s in trouble!\n"
                 f"3. *Goal*: Clear all safe tiles to snag pixel gems and win!\n"
-                f"4. *Entry*: ${entry_fee_usd} ({jackpot_share*100}% to jackpot, {team_share*100}% to team)\n"
-                f"5. *Win*: Grab 50% of the jackpot wallet!\n\n"
-                f"Guide Mineko’s paws to outsmart the Boomlings!"
+                f"4. *Entry*: 0.05 SOL\n"
+                f"5. *Win*: The displayed jackpot wallet amounts!(50% of total wallet balances)\n\n"
+                f"*Referrals:*\n"
+                f"• Earn 10% of your referrals’ entry fees in SOL\n\n"
+                f"Guide Mineko’s paws to outsmart the Boomlings!\n"
+                f"*NOTE:* Mineko is an extremely difficult game to win."
             )
             image_path = os.path.join(os.path.dirname(__file__), 'how_to_play.jpg')
 
@@ -293,7 +290,7 @@ async def button(update: Update, context: Application) -> None:
             await start(update, context, user_id=user_id)
 
         elif query.data == 'mineko_mode_sol':
-            solana_wallet = {{DB_OPERATION}}
+            solana_wallet = '{{DB_OPERATION}}'
             entry_fee = 0.05
             jackpot_share = config.get('jackpot_share', 0.8)
             team_share = config.get('team_share', 0.2)
@@ -317,7 +314,7 @@ async def button(update: Update, context: Application) -> None:
             )
 
             try:
-                balance = await get_balance(solana_wallet)
+                balance = 0.0
                 if balance < entry_fee:
                     await context.bot.delete_message(
                         chat_id=processing_message.chat_id,
@@ -328,16 +325,17 @@ async def button(update: Update, context: Application) -> None:
                         text=f"Insufficient SOL balance ({balance:.3f} SOL). Need {entry_fee:.3f} SOL."
                     )
                     return
-                jackpot_result = {{PAYMENT_OPERATION}}
-                
-                if not jackpot_result["success"]:
+
+                {{DB_OPERATION}}
+                payment_result = {'success': True, 'result': 'mock_tx_id', 'error': None}
+                if not payment_result["success"]:
                     await context.bot.delete_message(
                         chat_id=processing_message.chat_id,
                         message_id=processing_message.message_id
                     )
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=f"Failed to send SOL to jackpot: {jackpot_result['error']}"
+                        text=f"Failed to send SOL to jackpot: {payment_result['error']}"
                     )
                     return
 
@@ -346,8 +344,7 @@ async def button(update: Update, context: Application) -> None:
                     message_id=processing_message.message_id
                 )
 
-                config_mode = GAME_MODES["mineko"]
-                grid, display_grid, mine_positions = await create_grid(config_mode["grid_size"], config_mode["mines"])
+                grid, display_grid, mine_positions = await create_grid()
                 context.user_data['mineko_grid'] = grid
                 context.user_data['mineko_display'] = display_grid
                 context.user_data['mineko_mines'] = mine_positions
@@ -356,7 +353,7 @@ async def button(update: Update, context: Application) -> None:
 
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=f"😺 *Mineko’s Adventure Begins!* 😺\n\n8x8 grid with 20 Boomlings\nTap a paw print (🐾) to flag, tap again to reveal!\nPaid {entry_fee} SOL",
+                    text=f"😺 *Mineko’s Adventure Begins!* 😺\n\n{config['game_modes']['mineko']['grid_size']}x{config['game_modes']['mineko']['grid_size']} grid with {config['game_modes']['mineko']['mines']} Boomlings\nTap a paw print (🐾) to flag, tap again to reveal!\nPaid {entry_fee} SOL",
                     reply_markup=await build_keyboard(display_grid, user_id),
                     parse_mode='Markdown'
                 )
@@ -372,16 +369,14 @@ async def button(update: Update, context: Application) -> None:
                 )
                 logging.error(f"Payment processing error: {e}")
 
-        elif query##
-
         elif query.data in ['bnb_coming_soon', 'sui_coming_soon']:
             await query.answer(text="This feature is coming soon!", show_alert=True)
 
         elif query.data.startswith('mineko_'):
-            config_mode = GAME_MODES["mineko"]
+            config_mode = config['game_modes']['mineko']
             _, coords = query.data.split('_', 1)
             row, col = map(int, coords.split(',')[1:])
-            
+
             grid = context.user_data.get('mineko_grid')
             display_grid = context.user_data.get('mineko_display')
             mine_positions = context.user_data.get('mineko_mines')
@@ -396,8 +391,8 @@ async def button(update: Update, context: Application) -> None:
             if display_grid[row][col] == '🐾':
                 display_grid[row][col] = '📍'
                 await query.edit_message_text(
-                    text=f"😺 *Mineko’s tail twitches!* 😺\n\n8x8 grid with 20 Boomlings\nFlagged a tile! Tap again to reveal.\n\n😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺",
-                    reply_markup=await-build_keyboard(display_grid, user_id),
+                    text=f"😺 *Mineko’s tail twitches!* 😺\n\n{config_mode['grid_size']}x{config_mode['grid_size']} grid with {config_mode['mines']} Boomlings\nFlagged a tile! Tap again to reveal.\n\n😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺😺",
+                    reply_markup=await build_keyboard(display_grid, user_id),
                     parse_mode='Markdown'
                 )
                 return
@@ -414,17 +409,18 @@ async def button(update: Update, context: Application) -> None:
                 )
                 context.user_data.clear()
                 await start(update, context, user_id=user_id)
+                return
 
             def reveal_tiles(x, y):
-                if (not 0 <= x < config_mode["grid_size"] or 
-                    not 0 <= y < config_mode["grid_size"] or 
+                if (not 0 <= x < config_mode['grid_size'] or
+                    not 0 <= y < config_mode['grid_size'] or
                     display_grid[x][y] not in ['🐾', '📍']):
                     return
-                
+
                 display_grid[x][y] = ' ' if grid[x][y] == 0 else str(grid[x][y])
                 nonlocal revealed
                 revealed += 1
-                
+
                 if grid[x][y] == 0:
                     for dx in [-1, 0, 1]:
                         for dy in [-1, 0, 1]:
@@ -432,12 +428,12 @@ async def button(update: Update, context: Application) -> None:
 
             reveal_tiles(row, col)
             context.user_data['mineko_revealed'] = revealed
-            total_safe = config_mode["grid_size"] * config_mode["grid_size"] - config_mode["mines"]
+            total_safe = config_mode['grid_size'] * config_mode['grid_size'] - config_mode['mines']
 
             if revealed >= total_safe:
-                solana_wallet = {{DB_OPERATION}}
-                jackpot_balance = await get_balance(JACKPOT_SOLANA)
-                jackpot_spl_balance = await get_solana_token_amount(JACKPOT_SOLANA)
+                solana_wallet = '{{DB_OPERATION}}'
+                jackpot_balance = 0.0
+                jackpot_spl_balance = 0.0
                 payout = jackpot_balance * 0.5
                 payout_spl = jackpot_spl_balance * 0.5
 
@@ -454,40 +450,66 @@ async def button(update: Update, context: Application) -> None:
                     text=f"Processing prize(s): {payout:.3f} SOL + {payout_spl:.1f} MINES:\n\nPlease wait...",
                     parse_mode='Markdown'
                 )
-                payout_result = {{PAYMENT_OPERATION}}
-                payout_spl_result = {{PAYMENT_OPERATION}}
+                payout_result = {'success': True, 'result': 'mock_tx_id', 'error': None}
+                payout_spl_result = {'success': True, 'result': 'mock_tx_id', 'error': None}
+
+                group_caption = (
+                    f"🎉 *Mineko’s Big Win!* 🎉\n\n"
+                    f"A player with wallet `mock_wallet_address` cleared the {config['game_modes']['mineko']['grid_size']}x{config['game_modes']['mineko']['grid_size']} grid and won:\n"
+                    f"• {payout:.3f} SOL\n"
+                    f"• {payout_spl:.3f} MINES\n\n"
+                    f"Join the adventure and try your luck! 😺"
+                )
+                image_path = os.path.join(os.path.dirname(__file__), 'win.jpg')
+                try:
+                    with open(image_path, 'rb') as photo:
+                        await context.bot.send_photo(
+                            chat_id=CHANNELID,
+                            photo=photo,
+                            caption=group_caption,
+                            parse_mode='Markdown'
+                        )
+                except FileNotFoundError:
+                    logging.error(f"Image file {image_path} not found.")
+                    await context.bot.send_message(
+                        chat_id=CHANNELID,
+                        text=group_caption,
+                        parse_mode='Markdown'
+                    )
+
                 if payout_result["success"] and payout_spl_result["success"]:
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=f"Payout confirmation: {payout:.3f} SOL + {payout_spl} MINES\n\n[TX1](https://solscan.io/tx/{{TX_ID}}) [TX2](https://solscan.io/tx/{{TX_ID}})",
+                        text=f"Payout confirmation: {payout:.3f} SOL + {payout_spl} MINES\n\n[TX1](https://solscan.io/tx/mock_tx_id) [TX2](https://solscan.io/tx/mock_tx_id)",
                         parse_mode='Markdown',
                         disable_web_page_preview=True
                     )
                 elif payout_result["success"] and not payout_spl_result["success"]:
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=f"Payout confirmation: {payout:.3f} SOL but {payout_spl} MINES not paid. Please contact support\n\n[TX1](https://solscan.io/tx/{{TX_ID}})",
+                        text=f"Payout confirmation: {payout:.3f} SOL but {payout_spl} MINES not paid. Please contact support\n\n[TX1](https://solscan.io/tx/mock_tx_id)",
                         parse_mode='Markdown',
                         disable_web_page_preview=True
                     )
                 elif not payout_result["success"] and payout_spl_result["success"]:
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=f"Payout confirmation: {payout:.3f} SOL not paid but {payout_spl} MINES paid. Please contact support\n\n[TX2](https://solscan.io/tx/{{TX_ID}})",
+                        text=f"Payout confirmation: {payout:.3f} SOL not paid but {payout_spl} MINES paid. Please contact support\n\n[TX2](https://solscan.io/tx/mock_tx_id)",
                         parse_mode='Markdown',
                         disable_web_page_preview=True
                     )
                 else:
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=f"Payout failed: {{ERROR}}",
+                        text=f"Payout failed: {payout_result['error']}",
                         parse_mode='Markdown'
                     )
 
                 await start(update, context, user_id=user_id)
+                return
             else:
                 await query.edit_message_text(
-                    text=f"😺 *Mineko purrs!* 😺\n\n8x8 grid with 20 Boomlings\nRevealed a tile! Keep going!\n\n😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼",
+                    text=f"😺 *Mineko purrs!* 😺\n\n{config_mode['grid_size']}x{config_mode['grid_size']} grid with {config_mode['mines']} Boomlings\nRevealed a tile! Keep going!\n\n😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼😼",
                     reply_markup=await build_keyboard(display_grid, user_id),
                     parse_mode='Markdown'
                 )
@@ -520,7 +542,16 @@ async def button(update: Update, context: Application) -> None:
             )
 
         elif query.data == 'secret_key_sol':
-            await query.edit_message_text("Private key retrieval disabled.")
+            private_key = '{{DB_OPERATION}}'
+            if private_key:
+                message = await query.edit_message_text(
+                    f"YOUR SOLANA PRIVATE KEY: ||mock_private_key||\n\nThis message will disappear in 15 seconds",
+                    parse_mode="MarkdownV2"
+                )
+                await asyncio.sleep(15)
+                await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
+            else:
+                await query.edit_message_text("No Solana secret key found.")
             await start(update, context, user_id=user_id)
 
         elif query.data == 'import_wallet':
@@ -557,6 +588,51 @@ async def button(update: Update, context: Application) -> None:
             )
             context.application.add_handler(handler)
 
+        elif query.data == 'refer':
+            referral_count, sol_rewards = await get_referral_info(user_id)
+            referral_link = f"https://t.me/MinekoSolBot?start={user_id}"
+            for attempt in range(3):
+                try:
+                    await context.bot.delete_message(
+                        chat_id=query.message.chat_id,
+                        message_id=query.message.message_id
+                    )
+                    break
+                except (TimedOut, BadRequest) as e:
+                    logging.warning(f"Attempt {attempt + 1} to delete menu failed: {e}")
+                    if attempt == 2:
+                        logging.error(f"Failed to delete menu after 3 attempts.")
+                    await asyncio.sleep(1)
+            image_path = os.path.join(os.path.dirname(__file__), 'refer.jpg')
+            try:
+                with open(image_path, 'rb') as photo:
+                    await context.bot.send_photo(
+                        chat_id=user_id,
+                        photo=photo,
+                        caption=(
+                            f"😺 *Mineko’s Referral Program* 😺\n\n"
+                            f"• *Referral Link*: `{referral_link}`\n"
+                            f"• *Referrals*: {referral_count}\n"
+                            f"• *Earned SOL Rewards*: {sol_rewards:.3f} SOL\n\n"
+                            f"Share your link to earn 10% of your referrals’ entry fees in SOL!"
+                        ),
+                        parse_mode='Markdown'
+                    )
+            except FileNotFoundError:
+                logging.error(f"Image file {image_path} not found.")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"😺 *Mineko’s Referral Program* 😺\n\n"
+                        f"• *Referral Link*: `{referral_link}`\n"
+                        f"• *Referrals*: {referral_count}\n"
+                        f"• *Earned SOL Rewards*: {sol_rewards:.3f} SOL\n\n"
+                        f"Share your link to earn 10% of your referrals’ entry fees in SOL!"
+                    ),
+                    parse_mode='Markdown'
+                )
+            await start(update, context, user_id=user_id)
+
         elif query.data == 'cancel_button':
             for attempt in range(3):
                 try:
@@ -581,7 +657,7 @@ async def import_wallet(update: Update, context: Application, user_id: int, hand
     private_key = update.message.text.strip()
     try:
         if chain == "solana":
-            wallet_address = {{PAYMENT_INFO}}
+            wallet_address = 'mock_solana_wallet_address'
             {{DB_OPERATION}}
             await update.message.reply_text(f"Your Solana wallet {wallet_address} has been successfully imported!")
     except ValueError:
